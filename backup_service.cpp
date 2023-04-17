@@ -35,7 +35,6 @@
 #define LDAP_CONF_PATH       "/etc/nslcd.conf"
 #define LDAP_CONF_FILE       "nslcd.conf"
 
-
 // D-Bus root for backup restore
 constexpr auto backupRestoreRoot = "/xyz/openbmc_project/Backup";
 
@@ -123,9 +122,19 @@ class BackupImp : IfcBase
         bool restoreBackup(std::string fileName) override
         {
 	  std::ofstream fpchassis;
-	  fpchassis.open("/tmp/chassis.tmp");
-	  fpchassis << "Retore Backup with name " << fileName.c_str() << std::endl;
-	  fpchassis.close();
+
+	  //check if backup folder exists
+	  if(!fs::exists("/tmp/restore"))
+	    {
+	      return false;
+	    }
+	  else if (!fs::exists("/tmp/restore/" + fileName))
+	    {	
+	      return false;
+	    }
+
+	  //unzip the file with option overwrite files
+	  executeCmd("/usr/bin/unzip","-o",("/tmp/restore/" + fileName).c_str());
 	  
 	  return true; 
 	}
