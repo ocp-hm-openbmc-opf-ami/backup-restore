@@ -25,15 +25,14 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
+#include <nlohmann/json.hpp>
 
 
 //Definitions
-#define NETWORK_CONF_PATH    "/etc/systemd/network/"
-#define NETWORK_CONF_FILE    "network.zip"
-#define IPMI_CONF_PATH       ""
-#define IPMI_CONF_FILE       ""
-#define LDAP_CONF_PATH       "/etc/nslcd.conf"
-#define LDAP_CONF_FILE       "nslcd.conf"
+#define BACKUPCONF_FILE "/var/backups/backupconf.json"
+#define BACKUP_FOLDER   "/tmp/backup"
+#define RESTORE_FOLDER  "/tmp/restore"
 
 // D-Bus root for backup restore
 constexpr auto backupRestoreRoot = "/xyz/openbmc_project/Backup";
@@ -46,6 +45,7 @@ using ::phosphor::logging::report;
 using ::sdbusplus::xyz::openbmc_project::Common::Error::InternalFailure;
 
 using IfcBase = sdbusplus::xyz::openbmc_project::Backup::server::BackupRestore;
+using json = nlohmann::json;
 
 namespace fs = std::filesystem;
 
@@ -74,99 +74,167 @@ class BackupImp : IfcBase
         BackupImp(sdbusplus::bus_t& bus, const char* path) :
             IfcBase(bus, path)
         {
-	  //setPropertyByName(std::string{"backupFlags"},std::string{"N"});
+          //setPropertyByName(std::string{"backupFlags"},std::string{"N"});
         }
 
         /** Method: Create Backup file
-	 *  @brief Implementation Create Backup file
+         *  @brief Implementation Create Backup file
          *  @param[in] fileName - name of backup file
          */
         std::string createBackup(std::string fileName) override
         {
-	  bool backupExist = false;
-	  fs::current_path(fs::temp_directory_path());
-	  fs::create_directories("backup/" + fileName);
+          bool backupExist = false;
+          fs::current_path(fs::temp_directory_path());
+          fs::create_directories("backup/" + fileName);
+          std::ifstream fpConf;
 
-	  //copy all the conf files to the folder
-	  if(IfcBase::backupFlags().find('N') != std::string::npos)
-	  {
-	    executeCmd("/usr/bin/zip","/tmp/backup/network.zip",(std::string("/tmp/backup/") + NETWORK_CONF_PATH).c_str());
-	    fs::copy_file(LDAP_CONF_PATH,"backup/" + fileName + "/" + "network.zip");
-	    backupExist = true;
-	  }
-	  if(IfcBase::backupFlags().find('I') != std::string::npos)
-	  {
-	    fs::copy_file(IPMI_CONF_PATH,"backup/" + fileName + "/" + IPMI_CONF_FILE);
-	    backupExist = true;
-	  }
-	  if(IfcBase::backupFlags().find('L') != std::string::npos)
-	  {
-	    fs::copy_file(LDAP_CONF_PATH,"backup/" + fileName + "/" + LDAP_CONF_FILE);
-	    backupExist = true;
-	  }
-	  if(backupExist == false)
-	  {
-	    return std::string{"dev/null"};
-	  }
+          fpConf.open(BACKUPCONF_FILE);
+
+          json jfConf = json::parse(fpConf);
+          std::string confFolder;
+	  std::vector<std::string> confFiles;
+          // Read the backupconf
+          for (auto& jfBackupFlags : jfConf.items())
+            {
+              //Check the flags
+              if(IfcBase::backupFlags().find(jfBackupFlags.key()) != std::string::npos)
+                {
+                  for (auto& jfFlagFiles : jfBackupFlags.value().items())
+                    {
+                      // Get the file(s) and folder of the flag
+                      if(jfFlagFiles.key() == "file")
+			{
+			  confFiles = jfFlagFiles.value();
+			}
+                      else if (jfFlagFiles.key() == "folder")
+                        confFolder = jfFlagFiles.value();
+                    }
+		  for(auto tempFile : confFiles)
+		    {
+		      if(fs::exists(confFolder + "/" + tempFile))
+			{
+			  fs::copy_file(confFolder + "/" + tempFile,"backup/" + fileName + "/" + tempFile,fs::copy_options::overwrite_existing);
+			  backupExist = true;
+			}
+		    }
+                }
+            }
+          fpConf.close();
+
+          if(!backupExist)
+            {
+              return std::string{"/dev/null"};
+            }
+
+          //zip the file
+	  executeCmd("/bin/tar","-cf",("/tmp/backup/" + fileName + ".tar").c_str(),("/tmp/backup/" + fileName).c_str());
 	  
-	  //zip the file
-	  executeCmd("/usr/bin/zip",("/tmp/backup/" + fileName + ".zip").c_str(),("/tmp/backup/" + fileName).c_str());
-	  
-	  return ("/tmp/backup/" + fileName + ".zip"); 
-	}
+          return ("/tmp/backup/" + fileName + ".tar");
+        }
 
         /** Method: Restore Backup file
-	 *  @brief Implementation Restore Backup file
+         *  @brief Implementation Restore Backup file
          *  @param[in] fileName - name of backup file
          */
         bool restoreBackup(std::string fileName) override
         {
-	  std::ofstream fpchassis;
-
-	  //check if backup folder exists
-	  if(!fs::exists("/tmp/restore"))
-	    {
-	      return false;
-	    }
-	  else if (!fs::exists("/tmp/restore/" + fileName))
-	    {	
-	      return false;
-	    }
-
-	  //unzip the file with option overwrite files
-	  executeCmd("/usr/bin/unzip","-o",("/tmp/restore/" + fileName).c_str());
+	  std::string confFolder;
+	  std::vector<std::string> confFiles;
 	  
-	  return true; 
-	}
-  
+          std::ifstream fpConf;
+
+          fpConf.open(BACKUPCONF_FILE);
+          json jfConf = json::parse(fpConf);
+	  
+          //check if backup folder exists
+          if(!fs::exists("/tmp/restore"))
+            {
+              return false;
+            }
+          else if (!fs::exists("/tmp/restore/" + fileName + ".tar")) 
+            {
+              return false;
+            }
+
+          //unzip the file with option overwrite files
+          executeCmd("/bin/tar","-xf",("/tmp/restore/" + fileName + ".tar").c_str(),"-C","/tmp/restore/");
+
+	  // Check what backup files exist for restoring
+          // Read the backupconf
+          for (auto& jfBackupFlags : jfConf.items())
+            {
+              //Check the flags
+              if(IfcBase::backupFlags().find(jfBackupFlags.key()) != std::string::npos)
+                {
+                  for (auto& jfFlagFiles : jfBackupFlags.value().items())
+                    {
+                      // Get the file(s) and folder of the flag
+                      if(jfFlagFiles.key() == "file")
+			{
+			  confFiles = jfFlagFiles.value();
+			}
+                      else if (jfFlagFiles.key() == "folder")
+                        confFolder = jfFlagFiles.value();
+                    }
+		  for(auto tempFile : confFiles)
+		    {
+		      if(fs::exists(confFolder + "/" + tempFile))
+			{
+			  //Restoring files
+			  fs::path restorefile(("/tmp/restore/tmp/backup/" + fileName + "/" + tempFile).c_str());
+			  if (fs::exists(restorefile))
+			    {
+			      // trying to copy files
+			      try
+				{
+				  fs::path confStream((confFolder + tempFile).c_str());
+				  // remove the read permission from others if password is being written.
+				  // nslcd forces this behaviour.
+				  auto permission = fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read;
+				  fs::permissions((confFolder + tempFile).c_str(), permission);
+				  fs::copy_file(restorefile,confStream,fs::copy_options::overwrite_existing);
+				}
+			      catch (const std::exception& e)
+				{
+				  log<level::ERR>(e.what());
+				  elog<InternalFailure>();
+				}
+			    }//if file for restoring exists
+			} //if conf folder exists
+		    }//for restoring files
+
+                }
+            }
+          fpConf.close();
+	  
+          return true;
+        }
+
         /** Property: backup Flags
-	 *  @brief 
+         *  @brief
          *  @param[in] value - new value of the property
          */
         std::string backupFlags(std::string value) override
         {
-	  FILE *fpchassis = fopen("/tmp/chassis.tmp","a+");
-	  fprintf(fpchassis,"Set Property backupFlags %s\n",value.c_str());
-	  fclose(fpchassis);
-	  
-	  std::string val;
+          std::string val;
 
-	  try
-	  {
-	    if (value == IfcBase::backupFlags())
-	    {
-	      return value;
-	    }
-	    val = IfcBase::backupFlags(value);
-	  }
-	  catch (const std::exception& e)
-	  {
-	      log<level::ERR>(e.what());
-	      elog<InternalFailure>();
-	  }
-	  return val;
+          try
+          {
+            if (value == IfcBase::backupFlags())
+            {
+              return value;
+            }
+            val = IfcBase::backupFlags(value);
+          }
+          catch (const std::exception& e)
+          {
+              log<level::ERR>(e.what());
+              elog<InternalFailure>();
+          }
+          return val;
         }
 };
+
 
 int main(int argc, char** argv)
 {
@@ -176,20 +244,20 @@ int main(int argc, char** argv)
       argc = argc;
       argv = argv;
     }
-  
+
   auto bus = sdbusplus::bus::new_default();
 
   // Claim the bus now
   bus.request_name("xyz.openbmc_project.Backup");
-  
+
   sdbusplus::server::manager_t objManager(bus, backupRestoreRoot);
-  
+
   BackupImp backupManager(bus, backupRestoreRoot);
-    
+
   // Wait for client request
   bus.process_loop();
 
 
-  
+
   return -1;
 }
