@@ -30,7 +30,8 @@
 
 
 //Definitions
-#define BACKUPCONF_FILE "/var/backups/backupconf.json"
+//#define BACKUPCONF_FILE "/var/backups/backupconf.json"
+#define BACKUPCONF_FILE "/tmp/backupconf.json"
 #define BACKUP_FOLDER   "/tmp/backup"
 #define RESTORE_FOLDER  "/tmp/restore"
 
@@ -85,13 +86,16 @@ class BackupImp : IfcBase
         {
           bool backupExist = false;
           fs::current_path(fs::temp_directory_path());
+	  // clean backup folder
+	  if(fs::exists("backup"))
+	    fs::remove_all("backup");
           fs::create_directories("backup/" + fileName);
           std::ifstream fpConf;
-
+	  
           fpConf.open(BACKUPCONF_FILE);
 
           json jfConf = json::parse(fpConf);
-          std::string confFolder;
+	  std::vector<std::string> confFolders;
 	  std::vector<std::string> confFiles;
           // Read the backupconf
           for (auto& jfBackupFlags : jfConf.items())
@@ -107,14 +111,20 @@ class BackupImp : IfcBase
 			  confFiles = jfFlagFiles.value();
 			}
                       else if (jfFlagFiles.key() == "folder")
-                        confFolder = jfFlagFiles.value();
-                    }
-		  for(auto tempFile : confFiles)
-		    {
-		      if(fs::exists(confFolder + "/" + tempFile))
 			{
-			  fs::copy_file(confFolder + "/" + tempFile,"backup/" + fileName + "/" + tempFile,fs::copy_options::overwrite_existing);
-			  backupExist = true;
+			  confFolders = jfFlagFiles.value();
+			}
+                    }
+		  for(auto tempFolder : confFolders)
+		    {
+		      for(auto tempFile : confFiles)
+			{
+			  if(fs::exists(tempFolder + "/" + tempFile))
+			    {
+			      fs::create_directories("backup/" + fileName + tempFolder);
+			      fs::copy_file(tempFolder + "/" + tempFile,"backup/" + fileName + tempFolder + "/" + tempFile,fs::copy_options::overwrite_existing);
+			      backupExist = true;
+			    }
 			}
 		    }
                 }
@@ -138,9 +148,9 @@ class BackupImp : IfcBase
          */
         bool restoreBackup(std::string fileName) override
         {
-	  std::string confFolder;
+	  std::vector<std::string> confFolders;
 	  std::vector<std::string> confFiles;
-	  
+	  	  
           std::ifstream fpConf;
 
           fpConf.open(BACKUPCONF_FILE);
@@ -174,35 +184,37 @@ class BackupImp : IfcBase
 			  confFiles = jfFlagFiles.value();
 			}
                       else if (jfFlagFiles.key() == "folder")
-                        confFolder = jfFlagFiles.value();
+                        confFolders = jfFlagFiles.value();
                     }
-		  for(auto tempFile : confFiles)
+		  for(auto tempFolder : confFolders)
 		    {
-		      if(fs::exists(confFolder + "/" + tempFile))
+		      for(auto tempFile : confFiles)
 			{
-			  //Restoring files
-			  fs::path restorefile(("/tmp/restore/tmp/backup/" + fileName + "/" + tempFile).c_str());
-			  if (fs::exists(restorefile))
+			  if(fs::exists(tempFolder + "/" + tempFile))
 			    {
-			      // trying to copy files
-			      try
+			      //Restoring files
+			      fs::path restorefile(("/tmp/restore/tmp/backup/" + fileName + tempFolder + "/" + tempFile).c_str());
+			      if (fs::exists(restorefile))
 				{
-				  fs::path confStream((confFolder + tempFile).c_str());
-				  // remove the read permission from others if password is being written.
-				  // nslcd forces this behaviour.
-				  auto permission = fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read;
-				  fs::permissions((confFolder + tempFile).c_str(), permission);
-				  fs::copy_file(restorefile,confStream,fs::copy_options::overwrite_existing);
-				}
-			      catch (const std::exception& e)
-				{
-				  log<level::ERR>(e.what());
-				  elog<InternalFailure>();
-				}
-			    }//if file for restoring exists
-			} //if conf folder exists
-		    }//for restoring files
-
+				  // trying to copy files
+				  try
+				    {
+				      fs::path confStream((tempFolder + "/" + tempFile).c_str());
+				      // remove the read permission from others if password is being written.
+				      // nslcd forces this behaviour.
+				      auto permission = fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read;
+				      fs::permissions((tempFolder + "/" + tempFile).c_str(), permission);
+				      fs::copy_file(restorefile,confStream,fs::copy_options::overwrite_existing);
+				    }
+				  catch (const std::exception& e)
+				    {
+				      log<level::ERR>(e.what());
+				      elog<InternalFailure>();
+				    }
+				}//if file for restoring exists
+			    } //if temp folder exists
+			}//for confFile
+		    }//for confFolder
                 }
             }
           fpConf.close();
