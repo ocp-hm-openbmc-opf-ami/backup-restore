@@ -30,8 +30,7 @@
 
 
 //Definitions
-//#define BACKUPCONF_FILE "/var/backups/backupconf.json"
-#define BACKUPCONF_FILE "/tmp/backupconf.json"
+#define BACKUPCONF_FILE "/var/backups/backupconf.json"
 #define BACKUP_FOLDER   "/tmp/backup"
 #define RESTORE_FOLDER  "/tmp/restore"
 
