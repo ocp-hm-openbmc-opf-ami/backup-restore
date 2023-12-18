@@ -173,7 +173,7 @@ class BackupImp : IfcBase
           for (auto& jfBackupFlags : jfConf.items())
             {
               //Check the flags
-              if(IfcBase::backupFlags().find(jfBackupFlags.key()) != std::string::npos)
+              if((IfcBase::backupFlags().find(jfBackupFlags.key()) != std::string::npos) || (IfcBase::backupFlags().empty() == true))
                 {
                   for (auto& jfFlagFiles : jfBackupFlags.value().items())
                     {
