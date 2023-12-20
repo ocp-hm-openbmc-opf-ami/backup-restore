@@ -34,6 +34,11 @@
 #define BACKUP_FOLDER   "/tmp/backup"
 #define RESTORE_FOLDER  "/tmp/restore"
 
+#define SMTP "S"
+#define VIRTUALMEDIA "V"
+#define NETWORK "N"
+
+
 // D-Bus root for backup restore
 constexpr auto backupRestoreRoot = "/xyz/openbmc_project/Backup";
 
@@ -152,6 +157,8 @@ class BackupImp : IfcBase
 	  	  
           std::ifstream fpConf;
 
+	  std::string serviceFlags;	      
+
           fpConf.open(BACKUPCONF_FILE);
           json jfConf = json::parse(fpConf);
 	  
@@ -172,13 +179,26 @@ class BackupImp : IfcBase
           // Read the backupconf
           for (auto& jfBackupFlags : jfConf.items())
             {
-              //Check the flags
-              if((IfcBase::backupFlags().find(jfBackupFlags.key()) != std::string::npos) || (IfcBase::backupFlags().empty() == true))
-                {
-                  for (auto& jfFlagFiles : jfBackupFlags.value().items())
-                    {
-                      // Get the file(s) and folder of the flag
-                      if(jfFlagFiles.key() == "file")
+
+	      //Check the flags
+	      if((IfcBase::backupFlags().find(jfBackupFlags.key()) != std::string::npos) || (IfcBase::backupFlags().empty() == true))
+		{
+		  if(jfBackupFlags.key() == SMTP)
+		    {
+		      serviceFlags.push_back('S');
+		    }
+		  if(jfBackupFlags.key() == VIRTUALMEDIA)
+		    {
+		      serviceFlags.push_back('V');
+		    }
+		  if(jfBackupFlags.key() == NETWORK)
+		    {
+		      serviceFlags.push_back('N');
+		    }
+		  for (auto& jfFlagFiles : jfBackupFlags.value().items())
+		    {
+		      // Get the file(s) and folder of the flag
+		      if(jfFlagFiles.key() == "file")
 			{
 			  confFiles = jfFlagFiles.value();
 			}
@@ -217,7 +237,18 @@ class BackupImp : IfcBase
                 }
             }
           fpConf.close();
-	  
+	  if(serviceFlags.find('S') != std::string::npos)
+	    {
+	      executeCmd("/bin/systemctl","restart","mail-alert-manager.service");
+	    }
+	  if(serviceFlags.find('V') != std::string::npos)
+	    {
+	      executeCmd("/bin/systemctl","restart","xyz.openbmc_project.Network.service");
+	    }
+	  if(serviceFlags.find('N') != std::string::npos)
+	    {
+	      executeCmd("/bin/systemctl","restart","xyz.openbmc_project.VirtualMedia.service");
+	    }
           return true;
         }
 
