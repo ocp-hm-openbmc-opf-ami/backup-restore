@@ -1,16 +1,15 @@
+
+
 /* ****************************************************************
- *
- * Backup and Restore
- * backup_service.hpp
- *
- * @brief dbus service for Backup and Restore
- *
- * Author: Lucas Panayioto lucasp@ami.com
- *
- *****************************************************************/
-
-
-
+*
+* Backup and Restore
+* backup_service.hpp
+*
+* @brief dbus service for Backup and Restore
+*
+* Author: Lucas Panayioto lucasp@ami.com
+*
+*****************************************************************/
 #include <boost/process/child.hpp>
 #include <boost/process/io.hpp>
 
@@ -28,20 +27,18 @@
 #include <fstream>
 #include <string>
 
-using ::sdbusplus::xyz::openbmc_project::Common::Error::InternalFailure;
+using::sdbusplus::xyz::openbmc_project::Common::Error::InternalFailure;
 
 
-template <typename... ArgTypes>
-std::vector<std::string> executeCmd(const char* path, ArgTypes&&... tArgs)
+template <typename... ArgTypes> std::vector <std::string> executeCmd(const char * path, ArgTypes && ... tArgs)
 {
-    std::vector<std::string> stdOutput;
+    std::vector <std::string> stdOutput;
     boost::process::ipstream stdOutStream;
-    boost::process::child execProg(path, const_cast<char*>(tArgs)...,
-                                   boost::process::std_out > stdOutStream);
+    boost::process::child execProg(path, const_cast <char*> (tArgs) ..., 
+        boost::process::std_out > stdOutStream);
     std::string stdOutLine;
 
-    while (stdOutStream && std::getline(stdOutStream, stdOutLine) &&
-           !stdOutLine.empty())
+    while (stdOutStream && std::getline(stdOutStream, stdOutLine) && !stdOutLine.empty())
     {
         stdOutput.emplace_back(stdOutLine);
     }
@@ -49,16 +46,17 @@ std::vector<std::string> executeCmd(const char* path, ArgTypes&&... tArgs)
     execProg.wait();
 
     int retCode = execProg.exit_code();
+
     if (retCode)
     {
-        phosphor::logging::log<phosphor::logging::level::ERR>(
-            "Command execution failed",
-            phosphor::logging::entry("PATH=%d", path),
+        phosphor::logging::log <phosphor::logging::level::ERR> ("Command execution failed", 
+            phosphor::logging::entry("PATH=%d", path), 
             phosphor::logging::entry("RETURN_CODE:%d", retCode));
-	phosphor::logging::elog<InternalFailure>();
+        phosphor::logging::elog <InternalFailure> ();
 
     }
 
     return stdOutput;
 }
+
 
