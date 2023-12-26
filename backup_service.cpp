@@ -274,6 +274,9 @@ bool restoreBackup(std::string fileName) override
 
     if (serviceFlags.find('N') != std::string::npos)
     {
+        executeCmd("/bin/systemctl", "restart", "systemd-networkd.service");
+        executeCmd("/bin/systemctl", "restart", "systemd-resolved.service");
+        executeCmd("/bin/systemctl", "restart", "systemd-hostnamed.service");
         executeCmd("/bin/systemctl", "restart", "xyz.openbmc_project.Network.service");
     }
 
