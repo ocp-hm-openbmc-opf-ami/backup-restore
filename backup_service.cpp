@@ -58,6 +58,19 @@ namespace fs = std::filesystem;
 
 class BackupImp: IfcBase
 {
+private:
+
+    void restartService(const std::string& serviceName)
+    {
+        std::string restart_command = "/bin/systemctl restart " + serviceName;
+        int ret = std::system(restart_command.c_str());
+        if (ret == -1) {
+            std::cerr << "Error in restarting service: " << serviceName << std::endl;
+        } else {
+            std::cout << "Restarted the service: " << serviceName << std::endl;
+        }
+    }
+
 
 
 public:
@@ -83,6 +96,7 @@ BackupImp & operator = (BackupImp &&) = delete;
  */
 BackupImp(sdbusplus::bus_t & bus, const char * path): IfcBase(bus, path)
 {
+    Initialize_Key();
     //setPropertyByName(std::string{"backupFlags"},std::string{"N"});
 }
 
@@ -158,9 +172,11 @@ std::string createBackup(std::string fileName) override
     }
 
     //zip the file
-    executeCmd("/bin/tar", "-cf", ("/tmp/backup/" + fileName + ".tar").c_str(), ("/tmp/backup/" + fileName).c_str());
+    executeCmd("/bin/tar", "-cf", ("/tmp/backup/" + fileName + "_dcrpt.tar").c_str(), ("/tmp/backup/" + fileName).c_str());
 
-    return ("/tmp/backup/" + fileName + ".tar");
+    // Encrypt the tar file
+    std::string encryptedFilePath = encryptFile(fileName);
+    return encryptedFilePath;
 }
 
 
@@ -172,26 +188,33 @@ bool restoreBackup(std::string fileName) override
 {
     std::vector < std::string > confFolders;
     std::vector < std::string > confFiles;
+    std::vector < std::string > services;
 
     std::ifstream fpConf;
-
-    std::string serviceFlags;
-
+    fs::current_path(fs::temp_directory_path());
     fpConf.open(BACKUPCONF_FILE);
     json jfConf = json::parse(fpConf);
 
     //check if backup folder exists
-    if (!fs::exists("/tmp/restore"))
+    fs::path encryptedFilePath = "/tmp/restore/" + fileName + ".tar";
+    if (!fs::exists(encryptedFilePath))
     {
+        if (fs::exists("restore"))
+            fs::remove_all("restore");
+
         return false;
     }
-    else if (!fs::exists("/tmp/restore/" + fileName + ".tar"))
+
+    if (!decryptFile(fileName))
     {
+        if (fs::exists("restore"))
+            fs::remove_all("restore");
+
         return false;
     }
 
     //unzip the file with option overwrite files
-    executeCmd("/bin/tar", "-xf", ("/tmp/restore/" + fileName + ".tar").c_str(), "-C", "/tmp/restore/");
+    executeCmd("/bin/tar", "-xf", ("/tmp/restore/" + fileName + "_dcrpt.tar").c_str(), "-C", "/tmp/restore/");
 
     // Check what backup files exist for restoring
     // Read the backupconf
@@ -202,21 +225,7 @@ bool restoreBackup(std::string fileName) override
         if ((IfcBase::backupFlags().find(jfBackupFlags.key()) != std::string::npos) ||
              (IfcBase::backupFlags().empty() == true))
         {
-            if (jfBackupFlags.key() == SMTP)
-            {
-                serviceFlags.push_back('S');
-            }
-
-            if (jfBackupFlags.key() == VIRTUALMEDIA)
-            {
-                serviceFlags.push_back('V');
-            }
-
-            if (jfBackupFlags.key() == NETWORK)
-            {
-                serviceFlags.push_back('N');
-            }
-
+            
             for (auto & jfFlagFiles: jfBackupFlags.value().items())
             {
                 // Get the file(s) and folder of the flag
@@ -225,7 +234,13 @@ bool restoreBackup(std::string fileName) override
                     confFiles = jfFlagFiles.value();
                 }
                 else if (jfFlagFiles.key() == "folder")
+                {
                     confFolders = jfFlagFiles.value();
+                }
+                else if(jfFlagFiles.key() == "service")
+                {
+                    services =  jfFlagFiles.value();
+                }
             }
 
             for (auto tempFolder: confFolders)
@@ -262,28 +277,16 @@ bool restoreBackup(std::string fileName) override
                     } //if temp folder exists
                 } //for confFile
             } //for confFolder
+            for (auto tempServices: services)
+            {
+                restartService(tempServices);
+            }
         }
     }
 
     fpConf.close();
-
-    if (serviceFlags.find('S') != std::string::npos)
-    {
-        executeCmd("/bin/systemctl", "restart", "mail-alert-manager.service");
-    }
-
-    if (serviceFlags.find('N') != std::string::npos)
-    {
-        executeCmd("/bin/systemctl", "restart", "systemd-networkd.service");
-        executeCmd("/bin/systemctl", "restart", "systemd-resolved.service");
-        executeCmd("/bin/systemctl", "restart", "systemd-hostnamed.service");
-        executeCmd("/bin/systemctl", "restart", "xyz.openbmc_project.Network.service");
-    }
-
-    if (serviceFlags.find('V') != std::string::npos)
-    {
-        executeCmd("/bin/systemctl", "restart", "xyz.openbmc_project.VirtualMedia.service");
-    }
+    if (fs::exists("restore"))
+            fs::remove_all("restore");
 
     return true;
 }
@@ -328,7 +331,8 @@ int main(int argc, char * *argv)
         argc = argc;
         argv = argv;
     }
-
+    CheckAndWriteBackupKey(aesKeyFile ,GET_ENCRYPT_KEY);
+    CheckAndWriteBackupKey(aesIVFile ,GET_INITIAL_VECTOR);
     auto bus = sdbusplus::bus::new_default();
 
     // Claim the bus now

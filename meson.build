@@ -24,6 +24,8 @@ sdbusplus = dependency('sdbusplus')
 sdeventplus = dependency('sdeventplus')
 systemd = dependency('systemd')
 phosphor_logging_dep = dependency('phosphor-logging')
+openssl_dep = dependency('openssl')
+
 
 
 cpp = meson.get_compiler('cpp')
@@ -41,6 +43,7 @@ executable(
     sdeventplus,
     phosphor_dbus_interfaces,
     phosphor_logging_dep,
+    openssl_dep, 
   ],
   link_args: ['-lcrypt', '-lstdc++fs'],
   cpp_args: ['-DBOOST_ALL_NO_LIB', '-DBOOST_SYSTEM_NO_DEPRECATED', '-DBOOST_ERROR_CODE_HEADER_ONLY'],
