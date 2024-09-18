@@ -49,6 +49,8 @@
 #define GET_ENCRYPT_KEY 0
 #define GET_INITIAL_VECTOR 1
 
+using::sdbusplus::xyz::openbmc_project::Common::Error::InternalFailure;
+
 constexpr auto aesKeyFile = "/etc/backups/AESKey";
 constexpr auto aesIVFile = "/etc/backups/AESIV";
 constexpr auto AES_MAX_KEY_LENGTH = 32;  // 256 bits
@@ -59,9 +61,45 @@ constexpr auto AES_MAX_HEX_IV_LENGTH = 24;
 unsigned char aesKey[AES_MAX_KEY_LENGTH];
 unsigned char aesIV[AES_MAX_IV_LENGTH];
 
-using::sdbusplus::xyz::openbmc_project::Common::Error::InternalFailure;
+enum class ServiceAction { Start, Stop, Restart };
 
 void Initialize_Key();
+
+void controlSystemdService(const std::string &serviceName, ServiceAction action) 
+{
+
+    try {
+        auto bus = sdbusplus::bus::new_default();
+
+        std::string methodName;
+        if (action == ServiceAction::Start) {
+            methodName = "StartUnit";
+        } else if (action == ServiceAction::Stop) {
+            methodName = "StopUnit";
+        } else if (action == ServiceAction::Restart) {
+            methodName = "RestartUnit";
+        }
+
+        std::string mode = "replace";
+
+        auto msg = bus.new_method_call(
+                "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+                "org.freedesktop.systemd1.Manager", methodName.c_str());
+        msg.append(serviceName, mode);
+
+        bus.call_noreply(msg);
+
+    } catch (const sdbusplus::exception::SdBusError &e) {
+        if (action == ServiceAction::Start) {
+            std::cerr << "Failed to start service: " << e.what() << std::endl;
+        } else if (action == ServiceAction::Stop) {
+            std::cerr << "Failed to stop service: " << e.what() << std::endl;
+        } else if (action == ServiceAction::Restart) {
+            std::cerr << "Failed to Restart service: " << e.what() << std::endl;
+        }
+    }
+}
+
 template <typename... ArgTypes> std::vector <std::string> executeCmd(const char * path, ArgTypes && ... tArgs)
 {
     std::vector <std::string> stdOutput;

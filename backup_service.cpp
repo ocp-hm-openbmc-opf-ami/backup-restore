@@ -58,21 +58,6 @@ namespace fs = std::filesystem;
 
 class BackupImp: IfcBase
 {
-private:
-
-    void restartService(const std::string& serviceName)
-    {
-        std::string restart_command = "/bin/systemctl restart " + serviceName;
-        int ret = std::system(restart_command.c_str());
-        if (ret == -1) {
-            std::cerr << "Error in restarting service: " << serviceName << std::endl;
-        } else {
-            std::cout << "Restarted the service: " << serviceName << std::endl;
-        }
-    }
-
-
-
 public:
 
 /* Define all of the basic class operations:
@@ -277,9 +262,9 @@ bool restoreBackup(std::string fileName) override
                     } //if temp folder exists
                 } //for confFile
             } //for confFolder
-            for (auto tempServices: services)
+            for (auto serviceName: services)
             {
-                restartService(tempServices);
+                controlSystemdService(serviceName, ServiceAction::Restart);
             }
         }
     }
