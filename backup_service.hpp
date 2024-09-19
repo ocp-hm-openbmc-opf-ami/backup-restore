@@ -36,11 +36,8 @@
 #include <openssl/err.h>
 #include <openssl/bio.h>
 
-
-
 #define BR_KEY_IDENTIFIER "$BRAKIDF$"
 #define BR_IV_IDENTIFIER "$BRAIVIDF$"
-#define Image_size 0x4000000
 #define BR_KEY_OFFSET 0x3200
 #define BR_IV_OFFSET  0x3400
 #define BR_KID_SIZE   10
@@ -48,6 +45,8 @@
 #define erase_blk_size 0x10000
 #define GET_ENCRYPT_KEY 0
 #define GET_INITIAL_VECTOR 1
+#define IV_LEN 12
+#define TAG_LEN 16
 
 constexpr auto aesKeyFile = "/etc/backups/AESKey";
 constexpr auto aesIVFile = "/etc/backups/AESIV";
@@ -212,7 +211,7 @@ int AES_GetKeyFromFile(const char* filename, unsigned char* key, int key_size, i
         fp.write(hex_data, hex_key_size);
         std::cout << filename << " file not found, Generating new random key" << std::endl;
         fp.close();
-        ret = 1;
+        ret = 0;
     }
 
     delete[] hex_data;
@@ -228,6 +227,10 @@ int AES_GetKeyFromFile(const char* filename, unsigned char* key, int key_size, i
  */
 std::string encryptFile(const std::string &fileName)
 {
+    unsigned char inBuf[1024] = {0}, outBuf[1024 + EVP_MAX_BLOCK_LENGTH] = {0};
+    int bytesRead = 0, bytesEncrypted = 0;
+    unsigned char tag[TAG_LEN] = {0};
+
     OpenSSL_add_all_algorithms();
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
@@ -236,10 +239,20 @@ std::string encryptFile(const std::string &fileName)
         return "";
     }
 
-
-
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, aesKey, aesIV) != 1) {
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1) {
         std::cerr << "Error setting up cipher parameters" << std::endl;
+        EVP_CIPHER_CTX_free(ctx);
+        return "";
+    }
+
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, IV_LEN, nullptr) != 1) {
+        std::cerr << "Error setting IV length" << std::endl;
+        EVP_CIPHER_CTX_free(ctx);
+        return "";
+    }
+
+    if (EVP_EncryptInit_ex(ctx, nullptr, nullptr, aesKey, aesIV) != 1) {
+        std::cerr << "Error initializing key and IV" << std::endl;
         EVP_CIPHER_CTX_free(ctx);
         return "";
     }
@@ -253,13 +266,12 @@ std::string encryptFile(const std::string &fileName)
     }
 
     // Encrypt the file
-    unsigned char inBuf[1024], outBuf[1024 + EVP_MAX_BLOCK_LENGTH];
-    int bytesRead, bytesEncrypted;
-
     while ((bytesRead = inputFile.read(reinterpret_cast<char *>(inBuf), sizeof(inBuf)).gcount()) > 0) {
         if (EVP_EncryptUpdate(ctx, outBuf, &bytesEncrypted, inBuf, bytesRead) != 1) {
             std::cerr << "Error encrypting data" << std::endl;
             EVP_CIPHER_CTX_free(ctx);
+	    inputFile.close();
+            outputFile.close();
             return "";
         }
 
@@ -269,12 +281,26 @@ std::string encryptFile(const std::string &fileName)
     if (EVP_EncryptFinal_ex(ctx, outBuf, &bytesEncrypted) != 1) {
         std::cerr << "Error finalizing encryption" << std::endl;
         EVP_CIPHER_CTX_free(ctx);
+	inputFile.close();
+        outputFile.close();
         return "";
     }
 
     outputFile.write(reinterpret_cast<const char *>(outBuf), bytesEncrypted);
 
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, sizeof(tag), tag) != 1) {
+        std::cerr << "Error getting tag" << std::endl;
+        EVP_CIPHER_CTX_free(ctx);
+	inputFile.close();
+        outputFile.close();
+        return "";
+    }
+
+    outputFile.write(reinterpret_cast<const char *>(tag), sizeof(tag));
+
     EVP_CIPHER_CTX_free(ctx);
+    inputFile.close();
+    outputFile.close();
 
     return ("/tmp/backup/" + fileName + ".tar");
 }
@@ -289,38 +315,87 @@ std::string encryptFile(const std::string &fileName)
 
 bool decryptFile(const std::string& fileName)
 {
+    const size_t bufferSize = 1024;
+    unsigned char inBuf[bufferSize] = {0}, outBuf[bufferSize + EVP_MAX_BLOCK_LENGTH] ={0};
+    int bytesRead = 0, bytesDecrypted = 0;
+    unsigned char tag[TAG_LEN] ={0};
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        std::cerr << "Error creating cipher context" << std::endl;
+        return false;
+    }
 
-    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, aesKey, aesIV) != 1) {
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1) {
+        std::cerr << "Error setting up cipher parameters" << std::endl;
         EVP_CIPHER_CTX_free(ctx);
         return false;
     }
-    std::ifstream inputFile("/tmp/restore/" + fileName + ".tar" , std::ios::binary);
+
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, IV_LEN, nullptr) != 1) {
+        std::cerr << "Error setting IV length" << std::endl;
+        EVP_CIPHER_CTX_free(ctx);
+        return false;
+    }
+
+    if (EVP_DecryptInit_ex(ctx, nullptr, nullptr, aesKey, aesIV) != 1) {
+        std::cerr << "Error initializing key and IV" << std::endl;
+        EVP_CIPHER_CTX_free(ctx);
+        return false;
+    }
+
+    std::ifstream inputFile("/tmp/restore/" + fileName + ".tar", std::ios::binary);
     std::ofstream outputFile("/tmp/restore/" + fileName + "_dcrpt.tar", std::ios::binary);
-
     if (!inputFile || !outputFile) {
+        std::cerr << "Error opening files" << std::endl;
         EVP_CIPHER_CTX_free(ctx);
         return false;
     }
 
-    const size_t bufferSize = 1024;
-    unsigned char inBuf[bufferSize], outBuf[bufferSize + EVP_MAX_BLOCK_LENGTH];
-    int bytesRead, bytesDecrypted;
+    inputFile.seekg(0, std::ios::end);
+    std::streamsize fileSize = inputFile.tellg();
+    if (fileSize < TAG_LEN) {
+        std::cerr << "File too small to contain valid Data and Tag " << fileSize << std::endl;
+        EVP_CIPHER_CTX_free(ctx);
+	inputFile.close();
+        outputFile.close();
+        return false;
+    }
+    inputFile.seekg(0, std::ios::beg);
 
-    while ((bytesRead = inputFile.readsome((char*)inBuf, bufferSize)) > 0)
-    {
-        if (EVP_DecryptUpdate(ctx, outBuf, &bytesDecrypted, inBuf, bytesRead) != 1)
-        {
+    std::streamsize dataSize = fileSize - TAG_LEN; // Exclude the tag size
+    while (dataSize > 0) {
+        std::streamsize chunkSize = std::min(dataSize, static_cast<std::streamsize>(bufferSize));
+        inputFile.read(reinterpret_cast<char *>(inBuf), chunkSize);
+        bytesRead = inputFile.gcount();
+        dataSize -= bytesRead;
+
+        if (EVP_DecryptUpdate(ctx, outBuf, &bytesDecrypted, inBuf, bytesRead) != 1) {
+            std::cerr << "Error decrypting data" << std::endl;
             EVP_CIPHER_CTX_free(ctx);
+	    inputFile.close();
+            outputFile.close();
             return false;
         }
 
         outputFile.write(reinterpret_cast<const char *>(outBuf), bytesDecrypted);
     }
 
-    if (EVP_DecryptFinal_ex(ctx, outBuf, &bytesDecrypted) != 1) {
+    inputFile.read(reinterpret_cast<char *>(tag), sizeof(tag));
+
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, sizeof(tag), tag) != 1) {
+        std::cerr << "Error setting tag" << std::endl;
         EVP_CIPHER_CTX_free(ctx);
+	inputFile.close();
+        outputFile.close();
+        return false;
+    }
+
+    if (EVP_DecryptFinal_ex(ctx, outBuf, &bytesDecrypted) != 1) {
+        std::cerr << "Error finalizing decryption" << std::endl;
+        EVP_CIPHER_CTX_free(ctx);
+	inputFile.close();
+        outputFile.close();
         return false;
     }
 
@@ -373,6 +448,23 @@ void sigwrap_close(int fd) {
     close(fd);
 }
 
+uint64_t getImageSizeFromFWSize(const std::string &filePath = "/etc/FWSize") {
+  std::ifstream file(filePath);
+  if (!file.is_open()) {
+    std::cerr << "Error: Could not open file " << filePath << std::endl;
+    return 0;
+  }
+
+  std::string hexValue = {0};
+  std::getline(file, hexValue);
+  file.close();
+
+  uint64_t imageSize = 0;
+  std::istringstream(hexValue) >> std::hex >> imageSize;
+
+  return imageSize;
+}
+
 /*
  * @brief Read AESKey And AESIV from rom.ima
  *
@@ -392,6 +484,12 @@ std::string AES_GetEncryptKeyAndIV(int flag)
     int offset = 0;
     unsigned char* OneEBlock = nullptr;
     std::string key;
+    uint64_t Image_size = getImageSizeFromFWSize();
+
+    if (Image_size == 0) {
+	std::cerr << "Error in getting Image Size" << std::endl;
+	return "";
+    }
 
     OneEBlock = (unsigned char*)malloc(erase_blk_size);
     if (OneEBlock == nullptr) {
